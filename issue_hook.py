@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 
+import json
 from pprint import pprint
 import argh
 from argh.assembling import set_default_command
@@ -45,7 +46,7 @@ class JiraConnection:
         try:
             url = self.template.format(action=action, api=apiname, **self.__dict__)
             print(url)
-            return self.session.request(
+            resp = self.session.request(
                 verb,
                 url=url,
                 params=params,
@@ -56,9 +57,12 @@ class JiraConnection:
                 },
                 cookies=self.session.cookies
             )
+            if str(resp.status_code).startswith('4') :
+                raise HTTPError(resp.status_code)
         except HTTPError as e:
-            print(' %s occurred while processing %s ' % (e, action))
+            print('%s occurred while processing %s ' % (e, action))
             raise
+        return resp
 
 
 @argh.arg('--host', default='jira.findmeals.ru')
@@ -80,7 +84,13 @@ def main(args):
             if info['fields']['summary'] in orig_text:
                 return 'refs #%s' % key
             else:
-                return 'refs #%s (%s)' % (key, info['fields']['summary'])
+                return 'refs #%s (%s)%s' % (
+                    key,
+                    info['fields']['summary'],
+                    ' Компоненты: '+'/'.join(
+                      [x['name'] for x in info['fields']['components']]
+                    ) if info['fields'].get('components') else ''
+                )
 
     with open(args.commit_msg_file, 'r+') as f:
         text = ''.join(f.readlines())
