@@ -74,6 +74,9 @@ def main(args):
     connobj = JiraConnection(args.host, args.port, args.user, args.password)
     connobj.login()
 
+    resp = connobj.make_request(action='field').json()
+    epic_link_field_id = ([x['id'] for x in resp if x['name'] == 'Epic Link'] or [None])[0]
+
     def replace_func(orig_text, matchobj):
         key = matchobj.group(1)
         try:
@@ -84,12 +87,24 @@ def main(args):
             if info['fields']['summary'] in orig_text:
                 return 'refs #%s' % key
             else:
+                summary = info['fields']['summary']
+                components = ''
+                if info['fields'].get('components'):
+                    components = ' Компоненты: ' + '/'.join(
+                        [x['name'] for x in info['fields']['components']]
+                    )
+
+                if 'parent' in info['fields']:
+                    summary = info['fields']['parent']['fields']['summary'] + ' - ' + summary
+
+                if epic_link_field_id and info['fields'].get(epic_link_field_id):
+                    epic_summary = connobj.get_issue_info(info['fields'][epic_link_field_id])['fields']['summary']
+                    summary = epic_summary + ' - ' + summary
+
                 return 'refs #%s (%s)%s' % (
                     key,
-                    info['fields']['summary'],
-                    ' Компоненты: '+'/'.join(
-                      [x['name'] for x in info['fields']['components']]
-                    ) if info['fields'].get('components') else ''
+                    summary,
+                    components
                 )
 
     with open(args.commit_msg_file, 'r+') as f:
