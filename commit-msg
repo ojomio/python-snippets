@@ -1,0 +1,4 @@
+#!/bin/bash
+
+exec < /dev/tty
+/path/to/issue_hook.py "$1" --user=<> --password=<>
