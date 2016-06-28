@@ -125,6 +125,84 @@ class JiraConnection:
         return resp
 
 
+def create_issue(connobj, matchobj, orig_text):
+    project_key = matchobj.group('project')
+
+    issue_type = extract_issue_type(connobj, orig_text)
+
+    if '\n\n' in orig_text:
+        summary, description = orig_text.split('\n\n', maxsplit=1)
+    else:
+        summary, description = orig_text, ''
+    # Header text without control tokens, use the same regex, as was used for matching
+    summary = matchobj.re.sub('', summary)
+    summary = re.sub(r'#(bug|feature)', '', summary)
+
+    components_list = sorted(
+        connobj.get_project_components(project_key),
+        key=lambda x: x['name']
+    )
+
+    print('Enter one of the components below:')
+    for idx, component in enumerate(components_list):
+        print('%d. %s' % (idx, component['name']))
+    component_idx = int(sys.stdin.readline())
+    components = ' Компоненты: ' + components_list[component_idx]['name']
+
+    result = connobj.create_issue(
+        project_key,
+        summary,
+        description,
+        issue_type,
+        components=[components_list[component_idx]['id']]
+    )
+    print('Ссылка: %s' % result['self'])
+    return 'refs #%s (%s)%s' % (result['key'], summary, components)
+
+
+def extract_issue_type(connobj, orig_text):
+    issue_type_name = (re.findall(r'#(bug|feature)', orig_text.lower()) + ['bug'])[0]
+    issue_type = [
+        issue_type['id'] for issue_type
+        in connobj.get_issue_types()
+        if issue_type_name in issue_type['name'].lower()
+    ][0]
+    return issue_type
+
+
+def replace_func(connobj, orig_text, matchobj):
+    key = matchobj.group(1)
+
+    try:
+        info = connobj.get_issue_info(key)
+    except HTTPError:
+        return 'refs #%s' % key
+    else:
+        if info['fields']['summary'] in orig_text:
+            return 'refs #%s' % key
+        else:
+            summary = info['fields']['summary']
+            components = ''
+            if info['fields'].get('components'):
+                components = ' Компоненты: ' + '/'.join(
+                    [x['name'] for x in info['fields']['components']]
+                )
+
+            if 'parent' in info['fields']:
+                summary = info['fields']['parent']['fields']['summary'] + ' - ' + summary
+
+            resp = connobj.make_request(action='field').json()
+            epic_link_field_id = ([x['id'] for x in resp if x['name'] == 'Epic Link'] or [None])[0]
+            if epic_link_field_id and info['fields'].get(epic_link_field_id):
+                epic_summary = connobj.get_issue_info(info['fields'][epic_link_field_id])['fields']['summary']
+                summary = epic_summary + ' - ' + summary
+
+            return 'refs #%s (%s)%s' % (
+                key,
+                summary,
+                components
+            )
+
 @argh.arg('--host', default='jira.findmeals.ru')
 @argh.arg('--port', default=443)
 @argh.arg('--user')
@@ -134,80 +212,6 @@ def main(args):
     connobj = JiraConnection(args.host, args.port, args.user, args.password)
     connobj.login()
 
-    resp = connobj.make_request(action='field').json()
-    epic_link_field_id = ([x['id'] for x in resp if x['name'] == 'Epic Link'] or [None])[0]
-
-    def create_issue(matchobj, orig_text, regexp):
-        project_key = matchobj.group('project')
-
-        issue_type_name = (re.findall(r'#(bug|feature)', orig_text.lower()) + ['bug'])[0]
-        issue_type = [
-            issue_type['id'] for issue_type
-            in connobj.get_issue_types()
-            if issue_type_name in issue_type['name'].lower()
-        ][0]
-
-        if '\n\n' in orig_text:
-            summary, description = orig_text.split('\n\n', maxsplit=1)
-        else:
-            summary, description = orig_text, ''
-        summary = regexp.sub('', summary)  # Header text without control tokens
-        summary = re.sub(r'#(bug|feature)', '', summary)
-
-        components_list = sorted(
-            connobj.get_project_components(project_key),
-            key=lambda x: x['name']
-        )
-
-        print('Enter one of the components below:')
-        for idx, component in enumerate(components_list):
-            print('%d. %s' % (idx, component['name']))
-        component_idx = int(sys.stdin.readline())
-        components = ' Компоненты: ' + components_list[component_idx]['name']
-
-
-
-        result = connobj.create_issue(
-            project_key,
-            summary,
-            description,
-            issue_type,
-            components=[components_list[component_idx]['id']]
-        )
-        print('Ссылка: %s' % result['self'])
-        return 'refs #%s (%s)%s' % (result['key'], summary, components)
-
-    def replace_func(orig_text, matchobj):
-        key = matchobj.group(1)
-
-        try:
-            info = connobj.get_issue_info(key)
-        except HTTPError:
-            return 'refs #%s' % key
-        else:
-            if info['fields']['summary'] in orig_text:
-                return 'refs #%s' % key
-            else:
-                summary = info['fields']['summary']
-                components = ''
-                if info['fields'].get('components'):
-                    components = ' Компоненты: ' + '/'.join(
-                        [x['name'] for x in info['fields']['components']]
-                    )
-
-                if 'parent' in info['fields']:
-                    summary = info['fields']['parent']['fields']['summary'] + ' - ' + summary
-
-                if epic_link_field_id and info['fields'].get(epic_link_field_id):
-                    epic_summary = connobj.get_issue_info(info['fields'][epic_link_field_id])['fields']['summary']
-                    summary = epic_summary + ' - ' + summary
-
-                return 'refs #%s (%s)%s' % (
-                    key,
-                    summary,
-                    components
-                )
-
     with open(args.commit_msg_file, 'r+') as f:
         text = ''.join(f.readlines()).strip()
         f.seek(0)
@@ -216,10 +220,10 @@ def main(args):
         regexp = re.compile(r'\s*refs #newissue\s+(?P<project>\w+)(?P<parent>-\d+)?\s*')
         matchobj = regexp.search(text)
         if matchobj:
-            text = create_issue(matchobj, text, regexp=regexp)
+            text = create_issue(connobj, matchobj, text)
 
         else:
-            text = re.sub(r'refs #(\w+-\d+)', lambda x: replace_func(text, x), text)
+            text = re.sub(r'refs #(\w+-\d+)', lambda x: replace_func(connobj, text, x), text)
         f.write(text+'\n')
 
 
