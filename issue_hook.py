@@ -219,7 +219,7 @@ def main(args):
             text = create_issue(matchobj, text, regexp=regexp)
 
         else:
-            text = re.sub(text, lambda x: replace_func(text, x), text)
+            text = re.sub(r'refs #(\w+-\d+)', lambda x: replace_func(text, x), text)
         f.write(text+'\n')
 
 
