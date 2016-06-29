@@ -157,7 +157,7 @@ def create_issue(connobj, matchobj, orig_text):
         components=[components_list[component_idx]['id']]
     )
     print('Ссылка: %s' % result['self'])
-    return 'refs #%s (%s)%s' % (result['key'], summary, components)
+    return 'refs #%s (%s)%s%s' % (result['key'], summary, components, '\n\n%s' % description if description else '')
 
 
 def extract_issue_type(connobj, orig_text):
@@ -214,6 +214,7 @@ def main(args):
 
     with open(args.commit_msg_file, 'r+') as f:
         text = ''.join(f.readlines()).strip()
+        text = re.sub('^#.*\n', '', text, flags=re.M)  # strip comments
         f.seek(0)
         f.truncate()
 
